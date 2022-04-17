@@ -152,7 +152,7 @@
 
     - name: Push SSH banner generator script
       template:
-        src: sshd_banner_generator.py
+        src: ssh/sshd_banner_generator.py
         dest: ~/sshd_banner_generator.py
 
     - name: Generate SSH banner header
@@ -193,7 +193,7 @@
 
     - name: Push sshd_banner.conf template
       template:
-        src: sshd_banner.conf
+        src: ssh/sshd_banner.conf
         dest: /etc/ssh/sshd_config.d/sshd_banner.conf
 
     - name: Restart SSHD service
@@ -228,7 +228,6 @@
         create_home: true
         home: "/home/{{ var.sshUsername }}"
         shell: /bin/bash
-        group: "{{ var.sshUsername }}"
 
     - name: Create .ssh folder
       file:
@@ -273,7 +272,7 @@
 
     - name: Push 50unattended-upgrades template
       template:
-        src: 50unattended-upgrades
+        src: unattended-upgrades/50unattended-upgrades
         dest: /etc/apt/apt.conf.d/50unattended-upgrades
 
     - name: Restart unattended-upgrades service
@@ -316,7 +315,7 @@
 
     - name: Install docker-compose
       ansible.builtin.get_url:
-        url: https://github.com/docker/compose/releases/download/v2.3.4/docker-compose-linux-x86_64
+        url: https://github.com/docker/compose/releases/download/v2.4.1/docker-compose-linux-x86_64
         dest: /usr/local/bin/docker-compose
         mode: 0755
         group: root
@@ -346,14 +345,32 @@
         name: docker
         state: present
 
-    - name: Append the group 'docker' to arnaud.coral's groups
+    - name: Append the group 'docker' to user's groups
       ansible.builtin.user:
-        name: arnaud.coral
+        name: "{{ var.sshUsername }}"
         groups: docker
         append: yes
 
-    - name: Append the group 'docker' to gitlab's groups
-      ansible.builtin.user:
-        name: gitlab
-        groups: docker
-        append: yes
+  # -------------------------------------------------------------------------------------------
+  # Portainer
+  # -------------------------------------------------------------------------------------------
+
+    - name: Create Portainer directory
+      ansible.builtin.file:
+        state: directory
+        path: "/opt/portainer"
+        owner: 'root'
+        group: 'docker'
+        mode: '0770'
+
+    - name: Push Portainer docker-compose
+      template:
+        src: portainer/docker-compose.yml
+        dest: /opt/portainer/docker-compose.yml
+
+    - name: Start Portainer container
+      docker_compose:
+        project_src: /opt/portainer
+        files:
+        - docker-compose.yml
+      register: output
