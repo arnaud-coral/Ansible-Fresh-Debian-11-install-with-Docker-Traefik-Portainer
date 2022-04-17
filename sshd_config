@@ -1,0 +1,24 @@
+# --------------------------------------------------
+# OpenSSH sshd server system-wide configuration file
+# --------------------------------------------------
+
+Port 22
+
+AddressFamily any
+ListenAddress 0.0.0.0
+ListenAddress ::
+
+PermitRootLogin no
+
+PubkeyAuthentication yes
+PasswordAuthentication no
+ChallengeResponseAuthentication no
+UsePAM no
+
+X11Forwarding yes
+PrintMotd no
+Banner /etc/ssh/sshd-banner
+AcceptEnv LANG LC_*
+Subsystem sftp /usr/lib/openssh/sftp-server
+
+# ----------------------------------------------------

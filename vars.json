@@ -1,0 +1,7 @@
+{
+    "domain": "yourdomain.com",
+    "machine": "machine-prod",
+    "brandName": "yourdomain",
+    "sshUsername": "admin",
+    "sshPubKey": "/path/to/your/username/public_ssh_key.pub"
+}

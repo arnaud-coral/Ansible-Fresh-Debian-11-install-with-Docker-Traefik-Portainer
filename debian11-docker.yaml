@@ -1,0 +1,359 @@
+- name: Init Debian 11 server with Docker configuration
+  hosts: all:!localhost
+  become: yes
+  become_user: root
+  remote_user: debian
+
+  tasks:
+
+  # -------------------------------------------------------------------------------------------
+  # Load variables
+  # -------------------------------------------------------------------------------------------
+
+    - name: Include vars  into the 'var' variable
+      include_vars:
+        file: vars.json
+        name: var
+
+  # -------------------------------------------------------------------------------------------
+  # Sources & packages update
+  # -------------------------------------------------------------------------------------------
+
+    - name: Update sources list
+      ansible.builtin.apt:
+        update_cache: yes
+
+    - name: Upgrade packages
+      ansible.builtin.apt:
+        name: "*"
+        state: latest
+
+    - name: Upgrade distribution
+      ansible.builtin.apt:
+        upgrade: dist
+
+    - name: Packages cleanup (autoremove/autoclean)
+      ansible.builtin.apt:
+        autoclean: yes
+        autoremove: yes
+
+  # -------------------------------------------------------------------------------------------
+  # Set hostname
+  # -------------------------------------------------------------------------------------------
+
+    - name: Set hostname
+      shell:
+        cmd: hostnamectl set-hostname "{{ var.machine }}"
+
+    - name: Set preserve_hostname to true
+      lineinfile:
+        path: /etc/cloud/cloud.cfg
+        regexp: "^preserve_hostname:"
+        line: "preserve_hostname: true"
+
+    - name: Set manage_etc_hosts to false
+      lineinfile:
+        path: /etc/cloud/cloud.cfg.d/10_etc_hosts.cfg
+        regexp: "^manage_etc_hosts"
+        line: "manage_etc_hosts: false"
+        create: yes
+
+    - name: Set apt_preserve_sources_list to true
+      lineinfile:
+        path: /etc/cloud/cloud.cfg
+        regexp: "^apt_preserve_sources_list"
+        line: "apt_preserve_sources_list: true"
+
+    - name: Update /etc/hosts
+      lineinfile:
+        path: /etc/hosts
+        regexp: "^127.0.1.1 "
+        line: "127.0.1.1 {{ var.machine }}.{{ var.domain }} {{ var.machine}}"
+
+  # -------------------------------------------------------------------------------------------
+  # Locales
+  # -------------------------------------------------------------------------------------------
+
+    - name: Ensure fr_FR / fr_FR@euro / fr_FR.UTF-8 locales exists
+      locale_gen:
+        name: "{{ item }}"
+        state: present
+      with_items:
+        - fr_FR
+        - fr_FR@euro
+        - fr_FR.UTF-8
+
+    - name: Ensure en_US / en_US.ISO-8859-15 / en_US.UTF-8 locales exists
+      locale_gen:
+        name: "{{ item }}"
+        state: present
+      with_items:
+        - en_US
+        - en_US.ISO-8859-15
+        - en_US.UTF-8
+
+    - name: Ensure en_GB / en_GB.ISO-8859-15 / en_GB.UTF-8 locales exists
+      locale_gen:
+        name: "{{ item }}"
+        state: present
+      with_items:
+        - en_GB
+        - en_GB.ISO-8859-15
+        - en_GB.UTF-8
+
+    - name: Set default locale to en_US.UTF-8
+      ansible.builtin.debconf:
+        name: locales
+        question: locales/default_environment_locale
+        value: en_US.UTF-8
+        vtype: select
+
+  # -------------------------------------------------------------------------------------------
+  # Misc utilities
+  # -------------------------------------------------------------------------------------------
+
+    - name: Install Aptitude
+      ansible.builtin.apt:
+        name: aptitude
+        state: latest
+        update_cache: yes
+        force_apt_get: yes
+
+    - name: Install miscellaneous utilities
+      ansible.builtin.apt:
+        name: "{{ item }}"
+        state: latest
+        update_cache: yes
+      with_items:
+        - curl
+        - dbus
+        - dnsutils
+        - gnupg2
+        - haveged
+        - htop
+        - libpam-systemd
+        - ntp
+        - python3-apt
+        - python3-pip
+        - rsync
+        - whois
+
+  # -------------------------------------------------------------------------------------------
+  # Python packages & modules
+  # -------------------------------------------------------------------------------------------
+
+    - name: Install pyfiglet python module
+      ansible.builtin.pip:
+        name: pyfiglet
+
+  # -------------------------------------------------------------------------------------------
+  # SSH Banner
+  # -------------------------------------------------------------------------------------------
+
+    - name: Push SSH banner generator script
+      template:
+        src: sshd_banner_generator.py
+        dest: ~/sshd_banner_generator.py
+
+    - name: Generate SSH banner header
+      shell: /usr/bin/python3 ~/sshd_banner_generator.py
+      register: resultBanner
+
+    - name: Remove SSH banner generator Python script
+      file:
+        state: absent
+        path: ~/sshd_banner_generator.py
+
+    - name: Remove existing SSH banner
+      file:
+        state: absent
+        path: /etc/ssh/sshd-banner
+
+    - name: Create new SSH banner
+      lineinfile:
+        path: /etc/ssh/sshd-banner
+        line: "{{ resultBanner.stdout }}"
+        create: yes
+
+    - name: Add warning message to new banner
+      blockinfile:
+        path: /etc/ssh/sshd-banner
+        insertafter: EOF
+        block: |
+
+          WARNING : Unauthorized access to this system is forbidden and will be
+          prosecuted by law. By accessing this system, you agree that your actions
+          may be monitored if unauthorized usage is suspected.
+
+    - name: Banner cleanup
+      lineinfile:
+        path: /etc/ssh/sshd-banner
+        state: absent
+        regexp: '^# (BEGIN|END) ANSIBLE MANAGED BLOCK$'
+
+    - name: Push sshd_banner.conf template
+      template:
+        src: sshd_banner.conf
+        dest: /etc/ssh/sshd_config.d/sshd_banner.conf
+
+    - name: Restart SSHD service
+      service:
+        name: sshd
+        state: restarted
+
+  # -------------------------------------------------------------------------------------------
+  # Create sudoers group for users
+  # -------------------------------------------------------------------------------------------
+
+    - name: Make sure we have a sudoers group
+      group:
+        name: sudoers
+        state: present
+
+    - name: Allow 'sudoers' group to have passwordless sudo
+      lineinfile:
+        dest: /etc/sudoers
+        state: present
+        regexp: '^%sudoers'
+        line: '%sudoers ALL=(ALL) NOPASSWD: ALL'
+        validate: 'visudo -cf %s'
+
+  # -------------------------------------------------------------------------------------------
+  # Create user
+  # -------------------------------------------------------------------------------------------
+
+    - name: Create user
+      user:
+        name: "{{ var.sshUsername }}"
+        create_home: true
+        home: "/home/{{ var.sshUsername }}"
+        shell: /bin/bash
+        group: "{{ var.sshUsername }}"
+
+    - name: Create .ssh folder
+      file:
+        state: directory
+        path: "/home/{{ var.sshUsername }}/.ssh"
+        owner: "{{ var.sshUsername }}"
+        group: "{{ var.sshUsername }}"
+        mode: '0700'
+
+    - name: Add pub key to authorized_keys
+      authorized_key:
+        user: "{{ var.sshUsername }}"
+        state: present
+        key: "{{ lookup('file', '{{ var.sshPubKey }}') }}"
+
+
+    - name: Set permissions on public key
+      file:
+        path: "/home/{{ var.sshUsername }}/.ssh/authorized_keys"
+        owner: "{{ var.sshUsername }}"
+        group: "{{ var.sshUsername }}"
+        mode: '0644'
+
+    - name: Add user to sudoers group
+      user:
+        name="{{ var.sshUsername }}"
+        groups=sudoers
+        append=yes
+        state=present
+        createhome=yes
+
+  # -------------------------------------------------------------------------------------------
+  # Unattended Upgrades
+  # -------------------------------------------------------------------------------------------
+
+    - name: Install Unattented Upgrades
+      ansible.builtin.apt:
+        name: unattended-upgrades
+        state: latest
+        update_cache: yes
+        force_apt_get: yes
+
+    - name: Push 50unattended-upgrades template
+      template:
+        src: 50unattended-upgrades
+        dest: /etc/apt/apt.conf.d/50unattended-upgrades
+
+    - name: Restart unattended-upgrades service
+      ansible.builtin.systemd:
+        state: restarted
+        daemon_reload: yes
+        name: unattended-upgrades
+
+  # -------------------------------------------------------------------------------------------
+  # Docker
+  # -------------------------------------------------------------------------------------------
+
+    - name: Add Docker GPG apt Key
+      ansible.builtin.apt_key :
+        url: https://download.docker.com/linux/ubuntu/gpg
+        state: present
+
+    - name: Add Docker Repository
+      ansible.builtin.apt_repository:
+        repo: deb https://download.docker.com/linux/ubuntu bionic stable
+        state: present
+
+    - name: Install Docker
+      ansible.builtin.apt:
+        name: "{{ item }}"
+        state: latest
+        update_cache:
+      with_items:
+        - docker-ce
+        - docker-ce-cli
+        - containerd.io
+
+    - name: Install Docker Module for Python
+      ansible.builtin.pip:
+        name: docker
+
+    - name: Install docker-compose Module for Python
+      ansible.builtin.pip:
+        name: docker-compose
+
+    - name: Install docker-compose
+      ansible.builtin.get_url:
+        url: https://github.com/docker/compose/releases/download/v2.3.4/docker-compose-linux-x86_64
+        dest: /usr/local/bin/docker-compose
+        mode: 0755
+        group: root
+        owner: root
+
+    - name: Creating docker-compose symlink
+      ansible.builtin.file:
+        src: /usr/local/bin/docker-compose
+        dest: /usr/bin/docker-compose
+        owner: root
+        group: root
+        state: link
+
+    - name: Set docker-compose executable
+      ansible.builtin.file:
+        path: /usr/local/bin/docker-compose
+        mode: u+x
+
+    - name: Check Docker service is activated
+      ansible.builtin.service:
+        name: docker
+        state: started
+        enabled: yes
+
+    - name: Ensure group docker exists
+      ansible.builtin.group:
+        name: docker
+        state: present
+
+    - name: Append the group 'docker' to arnaud.coral's groups
+      ansible.builtin.user:
+        name: arnaud.coral
+        groups: docker
+        append: yes
+
+    - name: Append the group 'docker' to gitlab's groups
+      ansible.builtin.user:
+        name: gitlab
+        groups: docker
+        append: yes
